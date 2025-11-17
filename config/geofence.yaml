@@ -1,0 +1,5 @@
+geofence:
+  center:
+    latitude: -6.2549
+    longitude: 106.7183
+  radius_meters: 50

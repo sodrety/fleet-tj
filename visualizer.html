@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Geofence Scenario Visualizers</title>
+  <!-- Leaflet CSS (kept in head) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+  <style>
+    body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; margin:0; display:flex; height:100vh; }
+    #map { flex:1; }
+    #controls { width:360px; padding:12px; box-sizing:border-box; background:#f7f7f8; border-left:1px solid #e2e2e6; overflow:auto; }
+    h2{ margin:8px 0; font-size:16px }
+    label{ display:block; margin:8px 0 4px; font-size:13px }
+    select, button, input[type=range], input { width:100%; padding:8px; margin-bottom:8px; box-sizing:border-box; }
+    .small{ font-size:12px; color:#555 }
+    .legend{ margin-top:8px; font-size:13px }
+    .scenario-list{ max-height:220px; overflow:auto; }
+    .row{ display:flex; gap:8px }
+    .row > *{ flex:1 }
+    .footer { margin-top:12px; font-size:12px; color:#666 }
+    .error { color: #a00; font-weight:600; margin-top:8px }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="controls">
+    <h2>Geofence Scenario Visualizer</h2>
+    <label>Center (lat, lon)</label>
+    <div class="row">
+      <input id="centerLat" value="-6.2549" disabled />
+      <input id="centerLon" value="106.7183" disabled />
+    </div>
+
+    <label>Geofence radius (meters)</label>
+    <input id="radius" type="range" min="50" max="1000" value="50" disabled />
+    <div class="small"><span id="radiusVal">50</span> m</div>
+
+    <label>Scenario</label>
+    <select id="scenario">
+      <option value="inside">Always Inside (jitter)</option>
+      <option value="enter">Enter Geofence</option>
+      <option value="exit">Exit Geofence</option>
+    </select>
+
+    <label>Vehicle ID</label>
+    <input id="vehicleId" value="B1234XYZ" />
+
+    <label>Playback speed (ms per step)</label>
+    <input id="speed" type="range" min="200" max="2000" step="100" value="2000" disabled />
+    <div class="small"><span id="speedVal">2000</span> ms / step</div>
+
+    <div class="row">
+      <button id="play">Play</button>
+      <button id="pause">Pause</button>
+    </div>
+    <button id="reset">Reset Scenario</button>
+
+    <div class="legend">
+      <div><strong>Legend</strong></div>
+      <div>● Center — geofence center</div>
+      <div>○ Circle — geofence radius</div>
+      <div>🔵 Marker(s) — vehicle(s)</div>
+    </div>
+
+    <div class="error" id="errorMsg" style="display:none"></div>
+    <div class="footer">Tip: drag map, change radius, then Play. Multiple vehicles show a small fleet.</div>
+  </div>
+
+  <!-- We'll dynamically load Leaflet JS to avoid "L is not defined" errors caused by blocked/integrity-mismatch loads -->
+  <script>
+    // Load Leaflet if not present. Returns a Promise that resolves when Leaflet is available.
+    function loadLeaflet() {
+      return new Promise((resolve, reject) => {
+        if (window.L) return resolve();
+        const script = document.createElement('script');
+        script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+        script.defer = true;
+        script.onload = () => {
+          if (window.L) resolve();
+          else reject(new Error('Leaflet loaded but L is still undefined'));
+        };
+        script.onerror = () => reject(new Error('Failed to load Leaflet script'));
+        document.head.appendChild(script);
+      });
+    }
+
+    // Main initializer that runs after DOM is ready and Leaflet is loaded
+    async function init() {
+      const errorEl = document.getElementById('errorMsg');
+      try {
+        await loadLeaflet();
+      } catch (err) {
+        console.error(err);
+        errorEl.style.display = 'block';
+        errorEl.textContent = 'Error loading Leaflet: ' + err.message + '. Check your network or CDN access.';
+        return;
+      }
+
+      // now safe to use `L`
+      const map = L.map('map').setView([-6.2549, 106.7183], 15);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+
+      // Controls
+      const centerLatInput = document.getElementById('centerLat');
+      const centerLonInput = document.getElementById('centerLon');
+      const radiusInput = document.getElementById('radius');
+      const radiusVal = document.getElementById('radiusVal');
+      const scenarioSelect = document.getElementById('scenario');
+      const playBtn = document.getElementById('play');
+      const pauseBtn = document.getElementById('pause');
+      const resetBtn = document.getElementById('reset');
+      const speedInput = document.getElementById('speed');
+      const speedVal = document.getElementById('speedVal');
+      const vehicleIdInput = document.getElementById('vehicleId');
+
+      radiusVal.innerText = radiusInput.value;
+      speedVal.innerText = speedInput.value;
+
+      // Geofence layers
+      let geofenceCircle = null;
+      let centerMarker = null;
+
+      function updateGeofence() {
+        const lat = parseFloat(centerLatInput.value);
+        const lon = parseFloat(centerLonInput.value);
+        const r = parseFloat(radiusInput.value);
+        if (!isFinite(lat) || !isFinite(lon)) return;
+        if (geofenceCircle) { map.removeLayer(geofenceCircle); }
+        if (centerMarker) { map.removeLayer(centerMarker); }
+        geofenceCircle = L.circle([lat, lon], { radius: r, color:'#ff7f50', weight:2 }).addTo(map);
+        centerMarker = L.circleMarker([lat, lon], { radius:6, fill:true }).addTo(map);
+        // don't aggressively reset view if user pans far away; only set view if map center is far
+        const current = map.getCenter();
+        const dist = map.distance(current, L.latLng(lat, lon));
+        if (dist > 2000) map.setView([lat, lon]);
+      }
+      updateGeofence();
+
+      radiusInput.addEventListener('input', ()=>{ radiusVal.innerText = radiusInput.value; updateGeofence(); });
+      centerLatInput.addEventListener('change', updateGeofence);
+      centerLonInput.addEventListener('change', updateGeofence);
+
+      // Scenario generators
+      function jitter(center, steps){
+        const arr = [];
+        for(let i=0;i<steps;i++){
+          const lat = center[0] + (Math.random()-0.5)*0.0001;
+          const lon = center[1] + (Math.random()-0.5)*0.0001;
+          arr.push([lat,lon]);
+        }
+        return arr;
+      }
+
+      function enter(center, steps){
+        const arr=[]; const start=[center[0]-0.001, center[1]-0.001];
+        for(let i=0;i<steps;i++){
+          const t = i/(steps-1 || 1);
+          const lat = start[0] + (center[0]-start[0])*t + (Math.random()-0.5)*0.00005;
+          const lon = start[1] + (center[1]-start[1])*t + (Math.random()-0.5)*0.00005;
+          arr.push([lat,lon]);
+        }
+        return arr;
+      }
+
+      function exit(center, steps){
+        const arr=[]; const end=[center[0]+0.001, center[1]+0.001];
+        for(let i=0;i<steps;i++){
+          const t = i/(steps-1 || 1);
+          const lat = center[0] + (end[0]-center[0])*t + (Math.random()-0.5)*0.00005;
+          const lon = center[1] + (end[1]-center[1])*t + (Math.random()-0.5)*0.00005;
+          arr.push([lat,lon]);
+        }
+        return arr;
+      }
+
+      function hoverBoundary(center, radiusMeters, steps){
+        const arr=[];
+        for(let i=0;i<steps;i++){
+          const angle = (i/steps)*Math.PI*2;
+          const radDeg = (radiusMeters/111320); // approx degrees
+          const lat = center[0] + radDeg * Math.cos(angle) + (Math.random()-0.5)*0.00002;
+          const lon = center[1] + radDeg * Math.sin(angle) + (Math.random()-0.5)*0.00002;
+          arr.push([lat,lon]);
+        }
+        return arr;
+      }
+
+      function teleport(center, steps){
+        const arr=[];
+        for(let i=0;i<steps;i++){
+          if(Math.random() < 0.5){ arr.push([center[0] + (Math.random()-0.5)*0.0001, center[1] + (Math.random()-0.5)*0.0001]); }
+          else { arr.push([center[0] + (Math.random()*0.02 + 0.002)*((Math.random()<0.5)?1:-1), center[1] + (Math.random()*0.02 + 0.002)*((Math.random()<0.5)?1:-1)]); }
+        }
+        return arr;
+      }
+
+      function pathSimulation(center){
+        const path = [
+          [center[0]-0.006, center[1]-0.006],
+          [center[0]-0.004, center[1]-0.004],
+          [center[0]-0.002, center[1]-0.002],
+          [center[0]-0.0005, center[1]-0.0005],
+          [center[0], center[1]],
+          [center[0]+0.0015, center[1]+0.0015],
+          [center[0]+0.0035, center[1]+0.0035]
+        ];
+        const arr=[];
+        for(let i=0;i<path.length;i++){
+          const p=path[i];
+          arr.push([p[0]+(Math.random()-0.5)*0.00005, p[1]+(Math.random()-0.5)*0.00005]);
+        }
+        return arr;
+      }
+
+      function multipleVehicles(center, steps){
+        const fleet = {};
+        const ids = ['B1234XYZ','D8888ABC','T1111JK'];
+        ids.forEach((id, idx)=>{
+          const offset = idx*0.0006;
+          const arr = [];
+          for(let i=0;i<steps;i++){
+            const t = i/(steps-1 || 1);
+            const lat = center[0] - 0.002 + offset + t*0.004 + (Math.random()-0.5)*0.0002;
+            const lon = center[1] - 0.002 + offset + t*0.004 + (Math.random()-0.5)*0.0002;
+            arr.push([lat,lon]);
+          }
+          fleet[id] = arr;
+        });
+        return fleet;
+      }
+
+      // Animation engine
+      let timer = null;
+      let stepIndex = 0;
+      let positions = null; // either array for single vehicle, or object for fleet
+      let markers = {};
+
+      function buildScenario(){
+        Object.values(markers).forEach(m=>{ try{ map.removeLayer(m); }catch(e){} }); markers = {};
+        stepIndex = 0;
+        const center = [parseFloat(centerLatInput.value), parseFloat(centerLonInput.value)];
+        const radiusMeters = parseFloat(radiusInput.value);
+        const scenario = scenarioSelect.value;
+        const steps = 10;
+        if(scenario === 'inside'){
+          positions = jitter(center, steps);
+          markers[vehicleIdInput.value] = L.marker(positions[0]).addTo(map).bindPopup(vehicleIdInput.value);
+        } else if(scenario === 'enter'){
+          positions = enter(center, steps);
+          markers[vehicleIdInput.value] = L.marker(positions[0]).addTo(map).bindPopup(vehicleIdInput.value);
+        } else if(scenario === 'exit'){
+          positions = exit(center, steps);
+          markers[vehicleIdInput.value] = L.marker(positions[0]).addTo(map).bindPopup(vehicleIdInput.value);
+        } else if(scenario === 'hover'){
+          positions = hoverBoundary(center, radiusMeters, steps);
+          markers[vehicleIdInput.value] = L.marker(positions[0]).addTo(map).bindPopup(vehicleIdInput.value);
+        } else if(scenario === 'teleport'){
+          positions = teleport(center, steps);
+          markers[vehicleIdInput.value] = L.marker(positions[0]).addTo(map).bindPopup(vehicleIdInput.value);
+        } else if(scenario === 'path'){
+          positions = pathSimulation(center);
+          markers[vehicleIdInput.value] = L.marker(positions[0]).addTo(map).bindPopup(vehicleIdInput.value);
+        } else if(scenario === 'multiple'){
+          positions = multipleVehicles(center, steps);
+          for(const id in positions){ markers[id] = L.marker(positions[id][0]).addTo(map).bindPopup(id); }
+        }
+        // fit bounds
+        try{
+          if(Array.isArray(positions)){
+            const latlngs = positions.map(p=>L.latLng(p[0],p[1]));
+            map.fitBounds(L.latLngBounds(latlngs).pad(0.3));
+          } else {
+            const all = [];
+            for(const id in positions){ positions[id].forEach(p=>all.push(p)); }
+            map.fitBounds(L.latLngBounds(all.map(p=>L.latLng(p[0],p[1]))).pad(0.3));
+          }
+        }catch(e){ console.warn('fitBounds failed', e); }
+      }
+
+      function step(){
+        if(!positions) return;
+        if(Array.isArray(positions)){
+          if(stepIndex >= positions.length) { stop(); return; }
+          const p = positions[stepIndex];
+          const id = vehicleIdInput.value;
+          locate(p, id)
+          markers[id].setLatLng(p);
+          markers[id].bindPopup(id + ' — step ' + stepIndex);
+          stepIndex++;
+        } else {
+          const keys = Object.keys(positions);
+          if(keys.length === 0) return;
+          if(stepIndex >= positions[keys[0]].length){ stop(); return; }
+          keys.forEach(k=>{
+            const p = positions[k][stepIndex];
+            markers[k].setLatLng(p);
+            markers[k].bindPopup(k + ' — step ' + stepIndex);
+          });
+          stepIndex++;
+        }
+      }
+
+      function play(){ if(timer) return; timer = setInterval(step, parseInt(speedInput.value,10)); }
+      function stop(){ if(timer){ clearInterval(timer); timer = null; } }
+      function reset(){ stop(); buildScenario(); }
+
+      playBtn.addEventListener('click', ()=>{ if(!positions) buildScenario(); play(); });
+      pauseBtn.addEventListener('click', ()=>{ stop(); });
+      resetBtn.addEventListener('click', ()=>{ reset(); });
+      speedInput.addEventListener('input', ()=>{ speedVal.innerText = speedInput.value; if(timer){ stop(); play(); } });
+      scenarioSelect.addEventListener('change', ()=>{ buildScenario(); });
+
+      // initialize
+      buildScenario();
+
+      // update locatiion
+      function locate(location, id) {
+        console.log(location, id)
+        fetch(`http://localhost:8080/vehicles/locate`, {
+          method: "POST",
+          body: JSON.stringify({
+            latitude: normalizeCoord(location[0]),
+            longitude: normalizeCoord(location[1]),
+            vehicle_id: id,
+            timestamp: Date.now()
+          })
+        })
+      }
+
+      function normalizeCoord(value) {
+        return Number(value.toFixed(4));
+      }
+
+      // convenience: allow clicking map to set center
+      map.on('click', function(e){ centerLatInput.value = e.latlng.lat.toFixed(6); centerLonInput.value = e.latlng.lng.toFixed(6); updateGeofence(); buildScenario(); });
+    }
+
+    // Wait for DOM ready, then initialize
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+    else init();
+  </script>
+</body>
+</html>

@@ -1,0 +1,112 @@
+{
+	"info": {
+		"_postman_id": "2bbab036-2b3d-4140-9f53-2f25e645254f",
+		"name": "Fleet API",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "10792437",
+		"_collection_link": "https://lenna-api.postman.co/workspace/Team-Workspace~b8086933-9394-4c35-8a54-2e7aadfd0f62/collection/10792437-2bbab036-2b3d-4140-9f53-2f25e645254f?action=share&source=collection_link&creator=10792437"
+	},
+	"item": [
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/health",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"health"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Latest Location",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/vehicles/B1234XYZ/location",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"vehicles",
+						"B1234XYZ",
+						"location"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Locate Vehicle",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"location\": [\n        -6.254935230255908,\n        106.71826817563169\n    ]\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/vehicles/B1234XYZ/locate",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"vehicles",
+						"B1234XYZ",
+						"locate"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Location History",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/vehicles/B1234XYZ/history?start=1715000000&end=1715099999",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"vehicles",
+						"B1234XYZ",
+						"history"
+					],
+					"query": [
+						{
+							"key": "start",
+							"value": "1715000000"
+						},
+						{
+							"key": "end",
+							"value": "1715099999"
+						}
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
